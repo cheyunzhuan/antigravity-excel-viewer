@@ -1,0 +1,6 @@
+{
+  "name": "excel-viewer",
+  "displayName": "Excel Preview",
+  "description": "Preview Excel (.xlsx, .xlsm, .csv, .tsv) spreadsheets in the Antigravity side panel and open them in the default app.",
+  "version": "1.0.0"
+}

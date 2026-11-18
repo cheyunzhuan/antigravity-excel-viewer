@@ -1,0 +1,429 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Excel 表格预览</title>
+<script src="/preload.js"></script>
+<style>
+  :root {
+    --fg: var(--foreground, #e3e3e3);
+    --bg: var(--background, #18181b);
+    --panel: color-mix(in srgb, var(--fg) 5%, transparent);
+    --dim: var(--muted-foreground, #9aa0a6);
+    --line: var(--border, rgba(127, 127, 127, .25));
+    --accent: #4c8df6;
+    --hover: color-mix(in srgb, var(--fg) 7%, transparent);
+    --stripe: color-mix(in srgb, var(--fg) 2.5%, transparent);
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    display: flex; flex-direction: column;
+    color: var(--fg);
+    font: 12.5px/1.4 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+    -webkit-font-smoothing: antialiased;
+    overflow: hidden;
+  }
+  ::-webkit-scrollbar { width: 9px; height: 9px; }
+  ::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent; }
+  ::-webkit-scrollbar-thumb {
+    background: color-mix(in srgb, var(--dim) 32%, transparent);
+    border: 2px solid transparent;
+    border-radius: 999px;
+    background-clip: padding-box;
+  }
+  ::-webkit-scrollbar-thumb:hover { background-color: color-mix(in srgb, var(--dim) 55%, transparent); }
+
+  .toolbar {
+    padding: 10px 12px 8px;
+    border-bottom: 1px solid var(--line);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    flex: none;
+  }
+  .row { display: flex; gap: 6px; align-items: center; }
+  select, input[type="text"] {
+    flex: 1; min-width: 0;
+    background: var(--panel);
+    color: var(--fg);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 5px 8px;
+    font: inherit;
+    outline: none;
+  }
+  select:focus, input[type="text"]:focus { border-color: var(--accent); }
+  button {
+    font: inherit; font-size: 12px; color: var(--fg); cursor: pointer; white-space: nowrap;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 5px 9px;
+  }
+  button:hover:not(:disabled) { border-color: var(--dim); background: var(--hover); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  button.primary {
+    background: color-mix(in srgb, var(--accent) 16%, transparent);
+    border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+    color: var(--accent);
+    font-weight: 500;
+  }
+  button.primary:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--accent) 28%, transparent);
+  }
+
+  .meta-bar {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap;
+    font-size: 11.5px; color: var(--dim);
+  }
+  .sheets {
+    display: flex; gap: 4px; overflow-x: auto; padding: 6px 12px;
+    border-bottom: 1px solid var(--line); flex: none;
+  }
+  .sheets.hidden { display: none; }
+  .tab {
+    padding: 3px 10px; border-radius: 6px; font-size: 12px; color: var(--dim);
+    border: 1px solid transparent; background: transparent; cursor: pointer; white-space: nowrap;
+  }
+  .tab:hover { color: var(--fg); background: var(--panel); }
+  .tab.active {
+    color: var(--fg); background: var(--panel);
+    border-color: var(--line); font-weight: 500;
+  }
+
+  .table-wrap {
+    flex: 1; overflow: auto; position: relative;
+  }
+  .table-wrap.dragover {
+    outline: 2px dashed var(--accent);
+    outline-offset: -4px;
+  }
+  table {
+    border-collapse: collapse; width: max-content; min-width: 100%;
+    font-size: 12px; font-variant-numeric: tabular-nums;
+  }
+  th, td {
+    border-right: 1px solid var(--line);
+    border-bottom: 1px solid var(--line);
+    padding: 4px 8px;
+    text-align: left;
+    max-width: 280px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  thead th {
+    position: sticky; top: 0; z-index: 2;
+    background: var(--bg);
+    color: var(--dim); font-weight: 600; font-size: 11px; text-align: center;
+    box-shadow: inset 0 -1px 0 var(--line);
+  }
+  .rn {
+    position: sticky; left: 0; z-index: 1;
+    background: var(--bg); color: var(--dim);
+    text-align: right; min-width: 36px; width: 36px;
+    font-size: 11px; user-select: none;
+    box-shadow: inset -1px 0 0 var(--line);
+  }
+  thead th.rn { z-index: 3; }
+  tbody tr:nth-child(even) td:not(.rn) { background: var(--stripe); }
+  tbody tr:first-child td:not(.rn) { font-weight: 600; }
+  tbody tr:hover td:not(.rn) { background: var(--hover); }
+  td:not(.rn) { cursor: pointer; }
+
+  .empty {
+    margin: 48px 16px; text-align: center; color: var(--dim); line-height: 1.7;
+  }
+  .toast {
+    position: fixed; bottom: 12px; right: 12px; z-index: 20;
+    background: rgba(24, 24, 27, 0.92); color: #e3e3e3;
+    border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px;
+    font-size: 12px; opacity: 0; pointer-events: none; transition: opacity .18s;
+  }
+  .toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+  <div class="toolbar">
+    <div class="row">
+      <select id="fileSelect" title="选择工作区中的表格文件">
+        <option value="">正在扫描工作区表格...</option>
+      </select>
+      <button id="refreshBtn" title="重新扫描工作区">刷新</button>
+    </div>
+    <div class="row">
+      <input id="pathInput" type="text" placeholder="或粘贴本地 .xlsx / .csv 路径，回车预览（支持拖拽文件）">
+      <button id="loadPathBtn">打开</button>
+    </div>
+    <div class="row">
+      <input id="filterInput" type="text" placeholder="搜索当前表格内容...">
+      <button id="openAppBtn" class="primary" disabled title="使用 macOS 默认应用（Excel / Numbers / WPS）打开">默认应用打开</button>
+      <button id="revealBtn" disabled title="在访达 (Finder) 中定位文件">访达</button>
+    </div>
+    <div class="meta-bar">
+      <span id="statusText">请选择或拖入一个表格文件</span>
+      <span id="truncText"></span>
+    </div>
+  </div>
+
+  <div id="sheetsBar" class="sheets hidden"></div>
+  <div id="tableWrap" class="table-wrap">
+    <div class="empty">支持预览 <code>.xlsx</code>、<code>.xlsm</code>、<code>.csv</code>、<code>.tsv</code><br>可从上方下拉框选择工作区文件，或直接把文件拖到这里</div>
+  </div>
+  <div id="toast" class="toast"></div>
+
+<script>
+(() => {
+  const doFetch = (window.sidecar && window.sidecar.fetch) || fetch;
+  const fileSelect = document.getElementById('fileSelect');
+  const refreshBtn = document.getElementById('refreshBtn');
+  const pathInput = document.getElementById('pathInput');
+  const loadPathBtn = document.getElementById('loadPathBtn');
+  const filterInput = document.getElementById('filterInput');
+  const openAppBtn = document.getElementById('openAppBtn');
+  const revealBtn = document.getElementById('revealBtn');
+  const statusText = document.getElementById('statusText');
+  const truncText = document.getElementById('truncText');
+  const sheetsBar = document.getElementById('sheetsBar');
+  const tableWrap = document.getElementById('tableWrap');
+  const toastEl = document.getElementById('toast');
+
+  const params = new URLSearchParams(location.search);
+  const initialFile = params.get('file') || '';
+  const initialSheet = params.get('sheet') || '';
+
+  let workspaceUris = [];
+  let currentPath = '';
+  let currentSheet = '';
+  let currentMtimeMs = 0;
+  let currentData = null;
+  let toastTimer = null;
+
+  const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+  function showToast(msg) {
+    toastEl.textContent = msg;
+    toastEl.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => toastEl.classList.remove('show'), 1800);
+  }
+
+  function colLabel(idx) {
+    let n = idx + 1, s = '';
+    while (n > 0) {
+      const r = (n - 1) % 26;
+      s = String.fromCharCode(65 + r) + s;
+      n = Math.floor((n - 1) / 26);
+    }
+    return s;
+  }
+
+  async function scanFiles() {
+    fileSelect.innerHTML = '<option value="">正在扫描工作区表格...</option>';
+    try {
+      const qs = new URLSearchParams({ workspaces: JSON.stringify(workspaceUris) });
+      const res = await doFetch(`/api/files?${qs}`);
+      const data = await res.json();
+      const files = data.files || [];
+      if (!files.length) {
+        fileSelect.innerHTML = '<option value="">当前工作区未找到 Excel / CSV 文件</option>';
+        return;
+      }
+      fileSelect.innerHTML = '<option value="">-- 选择工作区表格 (' + files.length + ') --</option>' +
+        files.map((f) => `<option value="${esc(f.path)}">${esc(f.relPath)}</option>`).join('');
+      if (currentPath) {
+        fileSelect.value = currentPath;
+      } else {
+        // Auto-select the most recently modified file
+        currentPath = files[0].path;
+        fileSelect.value = currentPath;
+        pathInput.value = currentPath;
+        await loadPreview(currentPath);
+      }
+    } catch (e) {
+      fileSelect.innerHTML = '<option value="">扫描失败</option>';
+    }
+  }
+
+  async function loadPreview(filePath, sheet = '') {
+    if (!filePath) return;
+    currentPath = filePath;
+    currentSheet = sheet;
+    pathInput.value = filePath;
+    openAppBtn.disabled = false;
+    revealBtn.disabled = false;
+    statusText.textContent = '正在解析...';
+    truncText.textContent = '';
+
+    try {
+      const qs = new URLSearchParams({ path: filePath });
+      if (sheet) qs.set('sheet', sheet);
+      const res = await doFetch(`/api/preview?${qs}`);
+      const data = await res.json();
+      if (data.error) {
+        currentData = null;
+        sheetsBar.classList.add('hidden');
+        statusText.textContent = '解析失败';
+        tableWrap.innerHTML = `<div class="empty">${esc(data.error)}</div>`;
+        return;
+      }
+      currentData = data;
+      currentMtimeMs = data.mtimeMs || 0;
+      currentSheet = data.activeSheet || sheet;
+      renderSheets(data.sheets || [], data.activeSheet || '');
+      renderTable();
+    } catch (e) {
+      statusText.textContent = '请求失败';
+      tableWrap.innerHTML = `<div class="empty">${esc(e.message)}</div>`;
+    }
+  }
+
+  function renderSheets(sheets, active) {
+    if (!sheets.length || (sheets.length === 1 && /\.(csv|tsv)$/i.test(currentPath))) {
+      sheetsBar.classList.add('hidden');
+      sheetsBar.innerHTML = '';
+      return;
+    }
+    sheetsBar.classList.remove('hidden');
+    sheetsBar.innerHTML = sheets.map((s) =>
+      `<button class="tab ${s === active ? 'active' : ''}" data-sheet="${esc(s)}">${esc(s)}</button>`
+    ).join('');
+  }
+
+  function renderTable() {
+    if (!currentData) return;
+    const { totalRows, totalCols, truncatedRows, truncatedCols, rows } = currentData;
+    const kw = filterInput.value.trim().toLowerCase();
+    const maxCols = rows.reduce((m, r) => Math.max(m, r.length), 0) || totalCols;
+
+    const indexed = [];
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      if (!kw || i === 0 || r.some((c) => String(c).toLowerCase().includes(kw))) {
+        indexed.push({ rowNum: i + 1, cells: r });
+      }
+    }
+
+    statusText.textContent = kw
+      ? `匹配 ${indexed.length} 行（共 ${totalRows} 行 × ${totalCols} 列）`
+      : `共 ${totalRows} 行 × ${totalCols} 列`;
+    const notes = [];
+    if (truncatedRows) notes.push(`仅预览前 ${rows.length} 行`);
+    if (truncatedCols) notes.push(`仅预览前 ${maxCols} 列`);
+    truncText.textContent = notes.join(' · ');
+
+    if (!indexed.length || maxCols === 0) {
+      tableWrap.innerHTML = '<div class="empty">当前工作表为空</div>';
+      return;
+    }
+
+    let head = '<tr><th class="rn"></th>';
+    for (let c = 0; c < maxCols; c++) head += `<th>${colLabel(c)}</th>`;
+    head += '</tr>';
+
+    let body = '';
+    for (const item of indexed) {
+      body += `<tr><td class="rn">${item.rowNum}</td>`;
+      for (let c = 0; c < maxCols; c++) {
+        const val = item.cells[c] ?? '';
+        body += `<td title="${esc(val)}">${esc(val)}</td>`;
+      }
+      body += '</tr>';
+    }
+
+    tableWrap.innerHTML = `<table><thead>${head}</thead><tbody>${body}</tbody></table>`;
+  }
+
+  fileSelect.addEventListener('change', () => {
+    if (fileSelect.value) loadPreview(fileSelect.value);
+  });
+  refreshBtn.addEventListener('click', scanFiles);
+  loadPathBtn.addEventListener('click', () => loadPreview(pathInput.value.trim()));
+  pathInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') loadPreview(pathInput.value.trim());
+  });
+  filterInput.addEventListener('input', renderTable);
+
+  sheetsBar.addEventListener('click', (e) => {
+    const btn = e.target.closest('.tab');
+    if (btn && currentPath) loadPreview(currentPath, btn.dataset.sheet);
+  });
+
+  tableWrap.addEventListener('click', async (e) => {
+    const td = e.target.closest('td:not(.rn)');
+    if (!td) return;
+    const text = td.textContent;
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      showToast('已复制单元格内容');
+    } catch { /* ignore */ }
+  });
+
+  openAppBtn.addEventListener('click', async () => {
+    if (!currentPath) return;
+    const res = await doFetch('/api/open', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: currentPath }),
+    });
+    const data = await res.json();
+    showToast(data.ok ? '已调用默认应用打开' : `打开失败: ${data.error}`);
+  });
+
+  revealBtn.addEventListener('click', async () => {
+    if (!currentPath) return;
+    const res = await doFetch('/api/reveal', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: currentPath }),
+    });
+    const data = await res.json();
+    if (!data.ok) showToast(`定位失败: ${data.error}`);
+  });
+
+  tableWrap.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    tableWrap.classList.add('dragover');
+  });
+  tableWrap.addEventListener('dragleave', () => tableWrap.classList.remove('dragover'));
+  tableWrap.addEventListener('drop', (e) => {
+    e.preventDefault();
+    tableWrap.classList.remove('dragover');
+    const file = e.dataTransfer?.files?.[0];
+    if (file && file.path) loadPreview(file.path);
+  });
+
+  async function checkUpdates() {
+    if (document.hidden || !currentPath) return;
+    try {
+      const qs = new URLSearchParams({ workspaces: JSON.stringify(workspaceUris) });
+      const res = await doFetch(`/api/files?${qs}`);
+      const data = await res.json();
+      const match = (data.files || []).find((f) => f.path === currentPath);
+      if (match && match.mtimeMs && match.mtimeMs !== currentMtimeMs) {
+        await loadPreview(currentPath, currentSheet);
+        showToast('检测到表格已更新，已自动刷新');
+      }
+    } catch { /* ignore */ }
+  }
+
+  async function init() {
+    if (initialFile) {
+      currentPath = initialFile;
+      await loadPreview(initialFile, initialSheet);
+    }
+    if (window.sidecar && window.sidecar.getWorkspaceUris) {
+      workspaceUris = await window.sidecar.getWorkspaceUris();
+      window.sidecar.onWorkspaceChange((next) => {
+        workspaceUris = next || [];
+        scanFiles();
+      });
+    }
+    scanFiles();
+    setInterval(checkUpdates, 3000);
+  }
+  init();
+})();
+</script>
+</body>
+</html>
